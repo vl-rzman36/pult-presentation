@@ -8,7 +8,7 @@ async function fixture(){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'pult-package-test-'));
  const pdf=path.join(root,'Доклад.pdf'),pptx=path.join(root,'Доклад.pptx'),audio=path.join(root,'Фон.wav');
  await fs.writeFile(pdf,'%PDF-1.4\nTest slide');await fs.writeFile(pptx,'PPTX fixture');await fs.writeFile(audio,'Audio fixture');
- const event={name:'Тест переноса',state:{sections:[{id:'s',name:'Вступление',notes:'Объявить докладчика'}],files:[{id:'a',path:pptx,preparedPath:pdf,name:'Доклад.pptx',sectionId:'s',notes:'Личные заметки',page:2},{id:'b',path:pptx,preparedPath:pdf,sectionId:'s',page:1}],music:{playlists:[{id:'m',name:'Музыка',tracks:[{id:'t',path:audio,name:'Фон.wav'}]}]},placeholder:{text:'Перерыв'}}};
+ const event={name:'Тест переноса',state:{sections:[{id:'s',name:'Вступление',notes:'Объявить докладчика'}],files:[{id:'a',path:pptx,preparedPath:pdf,name:'Доклад.pptx',sectionId:'s',notes:'Личные заметки',page:2,videoOptions:{autoplay:true,loop:false,volume:.4,end:'next'}},{id:'b',path:pptx,preparedPath:pdf,sectionId:'s',page:1}],music:{fadeSeconds:2,volume:.8,playlists:[{id:'m',name:'Музыка',tracks:[{id:'t',path:audio,name:'Фон.wav',volume:.25}]}]},placeholder:{text:'Перерыв'}}};
  return {root,event,pdf,pptx,audio,package:path.join(root,'Мероприятие.pult')};
 }
 test('portable package preserves independent entries, notes, music and prepared PPTX without sources',async()=>{
@@ -16,7 +16,7 @@ test('portable package preserves independent entries, notes, music and prepared 
   const summary=await writePackage(f.package,f.event,path.join(f.root,'cache'));assert.equal(summary.files,3);
   await Promise.all([f.pdf,f.pptx,f.audio].map(file=>fs.unlink(file)));
   const imported=await readPackage(f.package,path.join(f.root,'import'));
-  assert.equal(imported.state.files[0].notes,'Личные заметки');assert.equal(imported.state.sections[0].notes,'Объявить докладчика');
+  assert.deepEqual(imported.state.files[0].videoOptions,f.event.state.files[0].videoOptions);assert.equal(imported.state.music.fadeSeconds,2);assert.equal(imported.state.music.playlists[0].tracks[0].volume,.25);assert.equal(imported.state.files[0].notes,'Личные заметки');assert.equal(imported.state.sections[0].notes,'Объявить докладчика');
   assert.equal(imported.state.files[0].path,imported.state.files[1].path);assert.notEqual(imported.state.files[0].page,imported.state.files[1].page);
   assert.match(await fs.readFile(imported.state.files[0].preparedPath,'utf8'),/^%PDF-/);
   assert.equal(await fs.readFile(imported.state.music.playlists[0].tracks[0].path,'utf8'),'Audio fixture');

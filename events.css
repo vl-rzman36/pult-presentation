@@ -18,3 +18,5 @@
 #section-form>label+label{margin-top:14px}#section-notes{resize:vertical;font:inherit;line-height:1.5}
 .event-busy .app-shell,.event-busy dialog{pointer-events:none;cursor:progress}
 @media(max-height:760px){.event-picker{padding:6px 10px}.event-picker>label{margin-bottom:3px}.music-panel-body{overflow:auto;flex:1;min-height:60px}.music-panel .music-track-list{min-height:80px;flex-shrink:0}.library-pane .pane-title{height:40px}}
+
+.scenario-next{display:flex;align-items:center;gap:8px;margin:4px 0 8px;min-width:0}.scenario-next>span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--muted,#aab3c1)}.scenario-next .btn{flex-shrink:0}.check-option{display:flex;align-items:center;gap:10px;margin:16px 0}.check-option input{width:auto}.music-track-row .track-settings{flex:none}.music-mode select{width:100%}@media(max-width:1250px){.scenario-next{flex-wrap:wrap}.scenario-next>span{flex-basis:100%}}@media(max-height:760px){.scenario-next{margin:0 0 3px}.scenario-next .btn{min-height:28px}.music-dock .music-mode{margin-top:4px}}

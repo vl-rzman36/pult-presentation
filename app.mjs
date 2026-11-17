@@ -30,6 +30,8 @@ let activePage = null;
 let publishSequence = 0;
 let restoring = true;
 let notesDocId = null;
+let advancing = false;
+let editingVideoId = null;
 const timer = createTimer($);
 let placeholder = { color: '#334b73', text: 'Скоро продолжим', backdrop: null };
 
@@ -42,7 +44,7 @@ class LocalPdfAssets {
 function savedState() { try { return JSON.parse(localStorage.getItem(stateKey) || '{}'); } catch { return {}; } }
 function snapshot() {
   let musicState={};try{musicState=JSON.parse(localStorage.getItem('pult.music.state.v1')||'{}');}catch{}
-  return { files:docs.map(d=>({id:d.id,path:d.path,name:d.name,page:d.page,time:d.mediaState?.time||0,sectionId:d.sectionId,notes:d.notes||'',preparedPath:d.preparedPath||null,sourceType:d.sourceType})),sections:structuredClone(sections),placeholder:structuredClone(placeholder),materialsLink:$('materials-link').value,music:musicState,timerLimit:Number($('timer-limit').value)||0 };
+  return { files:docs.map(d=>({id:d.id,path:d.path,name:d.name,page:d.page,time:d.mediaState?.time||0,sectionId:d.sectionId,notes:d.notes||'',preparedPath:d.preparedPath||null,sourceType:d.sourceType,videoOptions:d.videoOptions})),sections:structuredClone(sections),placeholder:structuredClone(placeholder),materialsLink:$('materials-link').value,music:musicState,timerLimit:Number($('timer-limit').value)||0 };
 }
 function persist() {
   if(restoring)return;
@@ -123,6 +125,40 @@ function initSidebar() {
   setWidth(width, false); showTab(tab);
 }
 initSidebar();
+function videoOptions(value = {}) {
+  return { autoplay: Boolean(value.autoplay), loop: Boolean(value.loop), volume: Number.isFinite(value.volume) ? Math.max(0,Math.min(1,value.volume)) : 1, end: ['hold','placeholder','next'].includes(value.end) ? value.end : 'hold' };
+}
+function scenario() { return sections.flatMap(section => docs.filter(doc => doc.sectionId === section.id)); }
+function following(doc = selected()) { const list=scenario(); const index=list.indexOf(doc); return index < 0 ? null : list[index+1] || null; }
+async function nextMaterial({ live = audienceOpen && !preparing && selectedId === activeId } = {}) {
+  if(advancing || restoring || document.body.classList.contains('event-busy'))return;
+  const next=following();
+  if(!next){setMessage('Сценарий завершён');return;}
+  if(next.missing){setMessage(`Следующий материал «${next.name}» не найден. Восстановите файл или выберите другой материал.`);return;}
+  advancing=true;
+  try {
+    pauseCurrentMedia(); selectedId=next.id; currentSectionId=next.sectionId;
+    next.page=1;if(next.mediaState)next.mediaState.time=0;
+    persist(); await refresh();
+    if(live && audienceOpen && selectedId===next.id)await showSelected();
+  } finally { advancing=false; updateHeader(selected()); }
+}
+$('next-material').addEventListener('click',()=>void nextMaterial());
+$('video-settings').addEventListener('click',()=>{
+  const doc=selected();if(doc?.kind!=='video')return;
+  editingVideoId=doc.id; const options=doc.videoOptions;
+  $('video-settings-name').textContent=doc.name;
+  $('video-autoplay').checked=options.autoplay;$('video-repeat').checked=options.loop;
+  $('video-volume').value=String(Math.round(options.volume*100));$('video-end').value=options.end;
+  $('video-end').disabled=options.loop;$('video-dialog').showModal();
+});
+$('video-repeat').addEventListener('change',()=>{$('video-end').disabled=$('video-repeat').checked;});
+$('video-form').addEventListener('submit',event=>{
+  event.preventDefault();const doc=docs.find(d=>d.id===editingVideoId);if(!doc)return;
+  doc.videoOptions=videoOptions({autoplay:$('video-autoplay').checked,loop:$('video-repeat').checked,volume:Number($('video-volume').value)/100,end:$('video-end').value});
+  if(mediaDocId===doc.id){videoPlayer.volume=doc.videoOptions.volume;videoPlayer.loop=doc.videoOptions.loop;}
+  persist();$('video-dialog').close();setMessage('Настройки видео сохранены');
+});
 function extension(path) { return path.slice(path.lastIndexOf('.')).toLowerCase(); }
 function mimeFor(ext) { return ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg'; }
 function kindFor(ext) { return ['.mp4', '.webm', '.mov'].includes(ext) ? 'video' : ['.mp3', '.m4a', '.wav', '.ogg'].includes(ext) ? 'audio' : ext === '.pdf' ? 'pdf' : 'image'; }
@@ -138,6 +174,7 @@ async function loadFile(filePath, savedPage = 1, savedTime = 0, saved = {}) {
   const file = await window.presentation.readFile(saved.preparedPath || filePath);
   const doc = { id: crypto.randomUUID(), path: filePath, name: file.name, page: 1, pages: 1, type: file.type, kind: kindFor(file.type), pdf: null, imageUrl: null, mediaUrl: file.mediaUrl || null, mediaState: { time: Math.max(0, Number(savedTime) || 0), playing: false }, renderCache: new Map() };
   doc.id=saved.id || doc.id; doc.name=saved.name || doc.name; doc.notes=saved.notes || ''; doc.sectionId=sections.some(s=>s.id===saved.sectionId)?saved.sectionId:(currentSectionId || sections[0]?.id); doc.preparedPath=saved.preparedPath || null;
+  doc.videoOptions = videoOptions(saved.videoOptions);
   doc.sourceType = saved.sourceType || file.sourceType || file.type;
   if (file.type === '.pdf') {
     const bytes = new Uint8Array(file.bytes);
@@ -230,6 +267,12 @@ for (const eventName of ['play', 'pause', 'seeked', 'ratechange', 'ended']) vide
   if (eventName === 'play') music.pauseForVideo();
   if (eventName === 'pause' || eventName === 'ended') music.resumeFromVideo();
   syncMedia(videoPlayer, true);
+  if(eventName==='ended') {
+    const doc=docs.find(d=>d.id===mediaDocId);
+    if(!doc || doc.id!==activeId || doc.id!==selectedId || !audienceOpen || preparing || placeholderOn || qrOn || doc.videoOptions.loop)return;
+    if(doc.videoOptions.end==='placeholder'){placeholderOn=true;setStage();}
+    if(doc.videoOptions.end==='next')void nextMaterial({live:true});
+  }
 });
 videoPlayer.addEventListener('timeupdate', () => syncMedia(videoPlayer));
 videoPlayer.addEventListener('error', () => {
@@ -253,6 +296,8 @@ function showMedia(doc) {
       if (mediaDocId === doc.id && doc.mediaState.time > 0) player.currentTime = Math.min(doc.mediaState.time, player.duration || doc.mediaState.time);
     }, { once: true });
   }
+  mediaPlayer().volume=doc.videoOptions.volume;
+  mediaPlayer().loop=doc.videoOptions.loop;
   $('current-image').hidden = true;
   $('current-empty').hidden = true;
   $('media-stage').hidden = false;
@@ -477,7 +522,13 @@ function updateHeader(doc) {
     $('notes').value = doc?.notes || '';
   }
   $('prev-btn').disabled = !doc || doc.page <= 1;
-  $('next-btn').disabled = !doc || doc.page >= doc.pages;
+  const next=following(doc);
+  $('next-btn').disabled = !doc || doc.missing || (doc.page >= doc.pages && !next);
+  $('next-btn').querySelector('span').textContent=doc && doc.page>=doc.pages && next ? 'К следующему' : 'Далее';
+  $('next-material').disabled=!next || advancing;
+  $('next-material-name').textContent=next ? next.name : 'Конец сценария';
+  $('next-material').title=next ? `Следующий материал: ${next.name}` : 'Конец сценария';
+  $('video-settings').hidden=doc?.kind!=='video';
   updateOutput();
 }
 
@@ -517,6 +568,7 @@ async function refresh() {
 
 async function changePage(delta) {
   const doc = selected(); if (!doc) return;
+  if(delta>0 && doc.page>=doc.pages){await nextMaterial();return;}
   const next = Math.max(1, Math.min(doc.pages, doc.page + delta));
   if (next === doc.page) return;
   doc.page = next; persist(); await refresh();
@@ -533,6 +585,10 @@ async function showSelected() {
   preparing = false; placeholderOn = false; qrOn = false;
   setStage();
   if (!audienceOpen) await startShow();
+  if(doc.kind==='video' && doc.videoOptions.autoplay && selectedId===doc.id && activeId===doc.id){
+    if(videoPlayer.ended)videoPlayer.currentTime=0;
+    try{await videoPlayer.play();}catch{setMessage('Нажмите ▶ под видео, чтобы начать воспроизведение');}
+  }
   updateHeader(selected()); updateLibrary();
   setMessage(`${doc.name}${doc.kind === 'video' ? '' : `, страница ${page}`} — на экране зрителей`);
 }

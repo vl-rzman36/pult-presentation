@@ -1,6 +1,6 @@
 {
   "name": "pult-presentation",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Пульт выступления: презентации, видео и фоновая музыка",
   "main": "main.js",
   "scripts": {
