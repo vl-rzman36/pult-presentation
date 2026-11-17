@@ -1,6 +1,8 @@
 export function organizeDesk($){
   const tools=$('tools-dialog');
-  $('tools-btn').addEventListener('click',()=>tools.showModal());
+  const menuButton=$('tools-btn');
+  menuButton.addEventListener('click',()=>{menuButton.setAttribute('aria-expanded','true');tools.showModal();});
+  tools.addEventListener('close',()=>menuButton.setAttribute('aria-expanded','false'));
   tools.addEventListener('click',event=>{const button=event.target.closest('button');if(button && !button.hasAttribute('data-close'))tools.close();},{capture:true});
   const pane=document.querySelector('.details-pane');
   const tabs=document.createElement('div');tabs.className='details-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Правая панель');
