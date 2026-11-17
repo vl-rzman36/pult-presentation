@@ -1,5 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, screen, protocol } = require('electron');
-const { createReadStream } = require('node:fs');
+const { createReadStream, readFileSync } = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const { Readable } = require('node:stream');
 const QRCode = require('qrcode');
 const { WebSocketServer } = require('ws');
+const { resolveDisplay } = require('./display-routing.cjs');
 const { importPptx } = require('./pptx.cjs');
 const { writePackage, readPackage } = require('./event-package.cjs');
 let eventSaveQueue = Promise.resolve();
@@ -15,12 +16,16 @@ let eventQuitReady = false;
 app.on('before-quit', event => {
   if(eventQuitReady) return;
   event.preventDefault();
-  eventSaveQueue.finally(()=>{eventQuitReady=true;app.quit();});
+  Promise.allSettled([eventSaveQueue,displaySaveQueue]).finally(()=>{eventQuitReady=true;app.quit();});
 });
 
 let presenter;
 let audience;
 let testDisplayWindow;
+let displayPreference={mode:'auto',reconnect:true};
+let audienceTarget=null;
+let displayWaiting=false;
+let displaySaveQueue=Promise.resolve();
 let stage = { mode: 'idle' };
 let remoteServer;
 let remotePort;
@@ -58,34 +63,47 @@ function createPresenter() {
   presenter.on('closed', () => { presenter = null; audience?.close();testDisplayWindow?.close(); });
 }
 
-function audienceBounds() {
-  const primary = screen.getPrimaryDisplay();
-  return screen.getAllDisplays().find(display => display.id !== primary.id)?.bounds;
+function displayRoute(preference=displayPreference){return resolveDisplay(screen.getAllDisplays(),screen.getPrimaryDisplay().id,preference);}
+function displayInfo(reason=''){
+  const route=displayRoute(audienceTarget||displayPreference),preferred=displayRoute();
+  return {reason,waiting:displayWaiting,open:Boolean(audience&&!audience.isDestroyed()),targetName:route.missing?(audienceTarget?.label||displayPreference.label||'Отключённый экран'):route.fullscreen?(route.display.label||`Экран ${route.display.id}`):'Отдельное окно',preference:{...displayPreference,id:preferred.display?.id??displayPreference.id},displays:screen.getAllDisplays().map(d=>({id:d.id,label:d.label,width:d.size.width,height:d.size.height,primary:d.id===screen.getPrimaryDisplay().id}))};
 }
-
-async function createAudience() {
-  if (audience && !audience.isDestroyed()) {
-    audience.show();
-    audience.focus();
-    return { secondary: Boolean(audienceBounds()) };
+function notifyDisplay(reason=''){presenter?.webContents.send('display-status',displayInfo(reason));}
+function saveDisplayPreference(){
+  const data=JSON.stringify(displayPreference);const file=path.join(app.getPath('userData'),'display-preference.json');
+  const task=displaySaveQueue.then(async()=>{await fs.mkdir(app.getPath('userData'),{recursive:true});await fs.writeFile(file+'.tmp',data);await fs.rename(file+'.tmp',file);});displaySaveQueue=task.catch(()=>{});return task;
+}
+function setAudiencePosition(route){
+  const current=audience.getBounds(),target=route.display.bounds;
+  if(route.fullscreen && audience.isFullScreen() && ['x','y','width','height'].every(key=>current[key]===target[key])){audienceTarget={mode:'display',id:route.display.id,label:route.display.label};return;}
+  audience.setFullScreen(false);
+  if(route.fullscreen)audience.setBounds(route.display.bounds);
+  else{const area=route.display.workArea||route.display.bounds,width=Math.min(1000,area.width),height=Math.min(650,area.height);audience.setBounds({x:area.x+Math.round((area.width-width)/2),y:area.y+Math.round((area.height-height)/2),width,height});}
+  if(route.fullscreen)audience.setFullScreen(true);
+  audienceTarget=route.fullscreen?{mode:'display',id:route.display.id,label:route.display.label}:{mode:'window'};
+}
+function syncDisplays(force=false){
+  if(!audience||audience.isDestroyed()){notifyDisplay();return;}
+  const route=displayRoute(force?displayPreference:audienceTarget||displayPreference);
+  if(route.missing){
+    const first=!displayWaiting;displayWaiting=true;audience.setFullScreen(false);audience.hide();
+    if(stage.mode==='media')stage={...stage,playing:false};audience.webContents.send('stage',stage);
+    notifyDisplay(first?'lost':'');return;
   }
-  const bounds = audienceBounds();
-  audience = new BrowserWindow({
-    ...(bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, fullscreen: true } : { width: 1100, height: 670 }),
-    title: 'Экран зрителей',
-    backgroundColor: '#000000',
-    autoHideMenuBar: true,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true,
-      backgroundThrottling: false, preload: path.join(__dirname, 'preload.js') },
-  });
-  audience.removeMenu();
-  audience.webContents.on('console-message', details => {
-    if (details.level === 'error') console.error('Audience:', details.message);
-  });
-  audience.loadFile(path.join(__dirname, 'audience.html'));
-  audience.webContents.on('did-finish-load', () => audience.webContents.send('stage', stage));
-  audience.on('closed', () => { audience = null; presenter?.webContents.send('audience-closed'); });
-  return { secondary: Boolean(bounds) };
+  if(displayWaiting&&!force&&displayPreference.reconnect===false){notifyDisplay();return;}
+  const restoring=displayWaiting;setAudiencePosition(route);displayWaiting=false;
+  audience.showInactive();audience.webContents.send('stage',stage);notifyDisplay(restoring?'restored':'');
+}
+async function createAudience() {
+  if(audience&&!audience.isDestroyed()){syncDisplays(true);return {secondary:displayRoute(audienceTarget).fullscreen,waiting:displayWaiting};}
+  const route=displayRoute();if(route.missing)throw new Error('Выбранный экран отключён. Подключите его или выберите другой в меню «Экран».');
+  audience=new BrowserWindow({width:1000,height:650,show:false,title:'Экран зрителей',backgroundColor:'#000000',autoHideMenuBar:true,webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true,backgroundThrottling:false,preload:path.join(__dirname,'preload.js')}});
+  audience.removeMenu();setAudiencePosition(route);displayWaiting=false;
+  audience.webContents.on('console-message',details=>{if(details.level==='error')console.error('Audience:',details.message);});
+  audience.webContents.on('did-finish-load',()=>{if(audience){audience.webContents.send('stage',stage);if(!displayWaiting)audience.showInactive();}});
+  audience.on('closed',()=>{audience=null;audienceTarget=null;displayWaiting=false;presenter?.webContents.send('audience-closed');notifyDisplay();});
+  audience.loadFile(path.join(__dirname,'audience.html'));notifyDisplay();
+  return {secondary:route.fullscreen,waiting:false};
 }
 
 function localAddresses() {
@@ -168,7 +186,9 @@ app.whenReady().then(async () => {
       return new Response(body, { status: partial ? 206 : 200, headers });
     } catch { return new Response('Файл недоступен', { status: 404 }); }
   });
+  try{const saved=JSON.parse(readFileSync(path.join(app.getPath('userData'),'display-preference.json'),'utf8'));if(['auto','window','display'].includes(saved.mode))displayPreference=saved;}catch{}
   createPresenter();
+  for(const event of ['display-added','display-removed','display-metrics-changed'])screen.on(event,()=>syncDisplays());
   try { await startRemote(); } catch (error) { console.error('Remote server:', error); }
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createPresenter(); });
 });
@@ -250,7 +270,7 @@ ipcMain.handle('close-show', () => {
 });
 ipcMain.on('stage-update', (_event, nextStage) => {
   if (!nextStage || !['idle', 'slide', 'placeholder', 'qr', 'media'].includes(nextStage.mode)) return;
-  stage = nextStage;
+  stage = displayWaiting && nextStage.mode==='media' ? {...nextStage,playing:false} : nextStage;
   audience?.webContents.send('stage', stage);
 });
 ipcMain.handle('choose-backdrop', async () => {
@@ -280,12 +300,22 @@ ipcMain.handle('preflight', async (_event, files) => {
     try{await fs.access(target);const stat=await fs.stat(target);results.push(stat.isFile()&&stat.size>0?{ok:true}:{ok:false,message:'Файл пуст или недоступен'});}
     catch{results.push({ok:false,message:'Файл не найден или нет доступа. Укажите его расположение.'});}
   }
-  return {files:results,displays:screen.getAllDisplays().map(d=>({id:d.id,label:d.label,width:d.size.width,height:d.size.height}))};
+  return {files:results,target:{missing:displayRoute().missing,name:displayInfo().targetName,fullscreen:displayRoute().fullscreen},displays:screen.getAllDisplays().map(d=>({id:d.id,label:d.label,width:d.size.width,height:d.size.height}))};
 });
 ipcMain.handle('test-display',()=>{
   if(audience&&!audience.isDestroyed())throw new Error('Сначала закройте экран зрителей');
   if(testDisplayWindow&&!testDisplayWindow.isDestroyed()){testDisplayWindow.focus();return;}
-  const primary=screen.getPrimaryDisplay();const display=screen.getAllDisplays().find(d=>d.id!==primary.id)||primary;
+  const route=displayRoute();if(route.missing)throw new Error('Выбранный экран отключён');const display=route.display;
   testDisplayWindow=new BrowserWindow({...display.bounds,fullscreen:true,frame:false,backgroundColor:'#202329',webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
   testDisplayWindow.loadFile(path.join(__dirname,'test-screen.html'));testDisplayWindow.on('closed',()=>{testDisplayWindow=null;});
+});
+
+ipcMain.handle('display-info',()=>displayInfo());
+ipcMain.handle('choose-display',async(_event,preference)=>{
+  if(!preference||!['auto','window','display'].includes(preference.mode))throw new Error('Выберите экран');
+  const next={mode:preference.mode,id:preference.id,label:String(preference.label||'').slice(0,200),reconnect:preference.reconnect!==false};
+  if(next.mode==='display'&&displayRoute(next).missing)throw new Error('Этот экран сейчас отключён. Подключите его или выберите другой.');
+  const previous=displayPreference;displayPreference=next;try{await saveDisplayPreference();}catch(error){displayPreference=previous;throw error;}
+  if(testDisplayWindow&&!testDisplayWindow.isDestroyed())testDisplayWindow.close();
+  syncDisplays(true);return displayInfo();
 });

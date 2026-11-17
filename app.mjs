@@ -5,6 +5,8 @@ import { createEvents } from './events.mjs';
 import { createHistory, editSignature } from './history.mjs';
 import { createInterface } from './interface.mjs';
 import { createPreflight } from './preflight.mjs';
+import { createDisplays } from './displays.mjs';
+import { organizeDesk } from './desk-layout.mjs';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs', import.meta.url).toString();
 
@@ -20,6 +22,7 @@ let selectedId = null;
 let activeId = null;
 let detachedActive = null;
 let audienceOpen = false;
+let displayDisconnected = false;
 let placeholderOn = false;
 let qrOn = false;
 let stageImage = null;
@@ -132,6 +135,13 @@ function initSidebar() {
 }
 initSidebar();
 const interfaceSettings=createInterface($);
+organizeDesk($);
+createDisplays({$,bridge:window.presentation,onStatus:status=>{
+  const lost=!displayDisconnected&&status.waiting;displayDisconnected=status.waiting;
+  if(lost){music.stop();pauseCurrentMedia();timer.pause();setMessage('Экран отключён. Видео и музыка на паузе. Подключите экран или выберите другой.');}
+  if(status.reason==='restored')setMessage('Экран подключён, показ восстановлен. Видео и музыку можно продолжить вручную.');
+  updateOutput();
+}});
 window.addEventListener('pult-interface-changed',()=>{
   if(!interfaceSettings.visible('music'))music.stop();
 });
@@ -274,6 +284,7 @@ function syncMedia(player, force = false) {
 
 const videoPlayer = $('video-player');
 for (const eventName of ['play', 'pause', 'seeked', 'ratechange', 'ended']) videoPlayer.addEventListener(eventName, () => {
+  if(eventName==='play'&&displayDisconnected&&activeId===mediaDocId){videoPlayer.pause();return;}
   if (eventName === 'play') music.pauseForVideo();
   if (eventName === 'pause' || eventName === 'ended') music.resumeFromVideo();
   syncMedia(videoPlayer, true);
@@ -335,6 +346,8 @@ function updateOutput() {
   $('output-caption').textContent = !audienceOpen ? 'Материалы видны только вам' : qrOn || placeholderOn ? label : doc ? `${doc.name}${doc.kind === 'video' ? (doc.mediaState.playing ? ' · воспроизведение' : ' · пауза') : ` · ${activePage || doc.page} / ${doc.pages}`}` : 'Выберите материал и нажмите «Показать зрителям»';
   $('show-status').classList.toggle('live', audienceOpen);
   $('show-status').querySelector('span:last-child').textContent = audienceOpen ? `Экран зрителей · ${label.toLowerCase()}` : 'Экран зрителей закрыт';
+  if(displayDisconnected && audienceOpen){$('output-badge').textContent='Отключён';$('output-caption').textContent='Показ сохранён · ожидаем подключения экрана';$('show-status').querySelector('span:last-child').textContent='Экран отключён · пауза';}
+
 }
 function setStage() {
   if (qrOn && materialsQr) window.presentation.sendStage({ mode: 'qr', qr: materialsQr, label: 'Материалы выступления' });
@@ -354,7 +367,7 @@ function setStage() {
 
 function renderThumbs(doc) {
   const strip = $('thumb-strip');
-  const isMedia = Boolean(doc?.mediaUrl || doc?.missing);
+  const isMedia = Boolean(doc?.mediaUrl || doc?.missing || doc?.pages===1);
   $('thumb-header').hidden = isMedia;
   strip.hidden = isMedia;
   if (isMedia) {
@@ -536,7 +549,10 @@ function updateHeader(doc) {
   $('next-btn').disabled = !doc || doc.missing || (doc.page >= doc.pages && !next);
   $('next-btn').querySelector('span').textContent=doc && doc.page>=doc.pages && next ? 'К следующему' : 'Далее';
   $('next-material').disabled=!next || advancing;
+  $('next-material').hidden=!next || Boolean(doc && doc.page>=doc.pages);
   $('next-material-name').textContent=next ? next.name : 'Конец сценария';
+  document.querySelector('.scenario-next').hidden=!next && doc?.kind!=='video';
+  document.body.classList.toggle('no-next-slide',!doc || doc.kind==='video' || doc.page>=doc.pages);
   $('next-material').title=next ? `Следующий материал: ${next.name}` : 'Конец сценария';
   $('video-settings').hidden=doc?.kind!=='video';
   updateOutput();
@@ -596,7 +612,7 @@ async function showSelected() {
   preparing = false; placeholderOn = false; qrOn = false;
   setStage();
   if (!audienceOpen) await startShow();
-  if(doc.kind==='video' && doc.videoOptions.autoplay && selectedId===doc.id && activeId===doc.id){
+  if(doc.kind==='video' && doc.videoOptions.autoplay && audienceOpen && !displayDisconnected && selectedId===doc.id && activeId===doc.id){
     if(videoPlayer.ended)videoPlayer.currentTime=0;
     try{await videoPlayer.play();}catch{setMessage('Нажмите ▶ под видео, чтобы начать воспроизведение');}
   }
@@ -604,14 +620,14 @@ async function showSelected() {
   setMessage(`${doc.name}${doc.kind === 'video' ? '' : `, страница ${page}`} — на экране зрителей`);
 }
 async function startShow() {
-  const result = await window.presentation.startShow();
+  let result;try{result=await window.presentation.startShow();}catch(error){setMessage(error.message);return;}
+  if(result.waiting){setMessage('Выбранный экран отключён.');return;}
   audienceOpen = true;
   timer.start();
   $('start-btn').textContent = 'Открыть экран зрителей';
   updateHeader(selected()); updateLibrary();
   setStage();
-  if (!result.secondary) setMessage('Второй экран не найден. Окно зрителей открыто отдельно — перенесите его на проектор.');
-  else setMessage('Экран зрителей открыт на втором мониторе.');
+  setMessage(result.secondary?'Показ открыт на выбранном экране.':'Показ открыт в отдельном окне. Экран можно выбрать кнопкой «Экран».');
 }
 function togglePlaceholder() { placeholderOn = !placeholderOn; if (placeholderOn) pauseCurrentMedia(); qrOn = false; setStage(); setMessage(placeholderOn ? 'Заглушка на проекторе' : 'Показ возвращён'); }
 function closeDialog(id) { $(id).close(); }

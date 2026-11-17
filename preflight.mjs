@@ -17,7 +17,8 @@ export function createPreflight({$,bridge,capture,inspect,repair,canRun,isLive})
       if(!state.files?.length){row('Сценарий пуст','Добавьте презентацию, изображение или видео.','warning');problems++;}
       const result=await bridge.preflight(files.map(f=>({id:f.id,path:f.path,preparedPath:f.preparedPath})));
       if(token!==sequence)return;
-      row('Экран зрителей',result.displays.length>1?`Обнаружено экранов: ${result.displays.length}. Проверьте тестовую картинку на нужном экране.`:'Найден один экран. Для отдельного показа подключите проектор или монитор.',result.displays.length>1?'ok':'warning');
+      if(result.target?.missing){row('Экран зрителей','Выбранный экран отключён. Выберите доступный экран через кнопку «Экран».','error');problems++;}
+      else row('Экран зрителей',result.displays.length>1?`Выбран: ${result.target?.name||'внешний экран'}. Обнаружено экранов: ${result.displays.length}. Проверьте тестовую картинку.`:'Найден один экран. Для отдельного показа подключите проектор или монитор.',result.displays.length>1?'ok':'warning');
       if(result.displays.length<2)problems++;
       for(let i=0;i<files.length;i++){
         if(token!==sequence)return;
