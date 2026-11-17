@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('presentation', {
+  preflight: files => ipcRenderer.invoke('preflight', files),
+  testDisplay: () => ipcRenderer.invoke('test-display'),
   exportEvent: event => ipcRenderer.invoke('export-event', event),
   importEvent: () => ipcRenderer.invoke('import-event'),
   loadEvents: () => ipcRenderer.invoke('load-events'),

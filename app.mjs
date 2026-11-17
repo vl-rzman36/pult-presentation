@@ -2,6 +2,9 @@ import * as pdfjs from './node_modules/pdfjs-dist/legacy/build/pdf.mjs';
 import { createMusicController } from './music.mjs';
 import { createTimer } from './timer.mjs';
 import { createEvents } from './events.mjs';
+import { createHistory, editSignature } from './history.mjs';
+import { createInterface } from './interface.mjs';
+import { createPreflight } from './preflight.mjs';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs', import.meta.url).toString();
 
@@ -10,10 +13,12 @@ const docs = [];
 let sections = [];
 let currentSectionId = null;
 let events;
+let history;
 let editingSectionId = null;
 let draggedItem = null;
 let selectedId = null;
 let activeId = null;
+let detachedActive = null;
 let audienceOpen = false;
 let placeholderOn = false;
 let qrOn = false;
@@ -46,15 +51,16 @@ function snapshot() {
   let musicState={};try{musicState=JSON.parse(localStorage.getItem('pult.music.state.v1')||'{}');}catch{}
   return { files:docs.map(d=>({id:d.id,path:d.path,name:d.name,page:d.page,time:d.mediaState?.time||0,sectionId:d.sectionId,notes:d.notes||'',preparedPath:d.preparedPath||null,sourceType:d.sourceType,videoOptions:d.videoOptions})),sections:structuredClone(sections),placeholder:structuredClone(placeholder),materialsLink:$('materials-link').value,music:musicState,timerLimit:Number($('timer-limit').value)||0 };
 }
-function persist() {
+function persist(historyKey=null) {
   if(restoring)return;
   // Keep legacy session readable by the previous app; the complete event lives on disk.
   const state=snapshot();
   localStorage.setItem(stateKey,JSON.stringify({files:state.files,placeholder:state.placeholder,materialsLink:state.materialsLink}));
+  history?.observe(typeof historyKey==='string'?historyKey:null);
   events?.changed();
 }
 function selected() { return docs.find(d => d.id === selectedId) || null; }
-function active() { return docs.find(d => d.id === activeId) || null; }
+function active() { return docs.find(d => d.id === activeId) || (detachedActive?.id===activeId ? detachedActive : null); }
 function setMessage(message) { $('message').textContent = message; }
 const music = createMusicController({ bridge: window.presentation, $, setMessage, isVideoPlaying: () => !$('video-player').paused });
 function initSidebar() {
@@ -125,6 +131,10 @@ function initSidebar() {
   setWidth(width, false); showTab(tab);
 }
 initSidebar();
+const interfaceSettings=createInterface($);
+window.addEventListener('pult-interface-changed',()=>{
+  if(!interfaceSettings.visible('music'))music.stop();
+});
 function videoOptions(value = {}) {
   return { autoplay: Boolean(value.autoplay), loop: Boolean(value.loop), volume: Number.isFinite(value.volume) ? Math.max(0,Math.min(1,value.volume)) : 1, end: ['hold','placeholder','next'].includes(value.end) ? value.end : 'hold' };
 }
@@ -252,7 +262,7 @@ function decodeImage(url) {
 }
 
 function syncMedia(player, force = false) {
-  const doc = docs.find(item => item.id === mediaDocId);
+  const doc = docs.find(item => item.id === mediaDocId) || (detachedActive?.id===mediaDocId?detachedActive:null);
   if (!doc || doc.kind !== 'video' || mediaPlayer() !== player) return;
   doc.mediaState.time = Number.isFinite(player.currentTime) ? player.currentTime : 0;
   doc.mediaState.playing = !player.paused && !player.ended;
@@ -281,7 +291,7 @@ videoPlayer.addEventListener('error', () => {
 
 function pauseCurrentMedia() {
   if (!mediaDocId) return;
-  const doc = docs.find(item => item.id === mediaDocId);
+  const doc = docs.find(item => item.id === mediaDocId) || (detachedActive?.id===mediaDocId?detachedActive:null);
   if (doc) mediaPlayer().pause();
 }
 
@@ -454,7 +464,7 @@ function drawLibrary() {
       const status=document.createElement('span');status.className='onair-chip';meta.append(pages,status);item.append(title,meta);
       item.addEventListener('click',()=>{selectedId=doc.id;currentSectionId=doc.sectionId;$('section-select').value=currentSectionId;void refresh();});
       const remove=makeButton('×',`Убрать ${doc.name} из сценария`,()=>removeFile(doc.id));remove.classList.add('remove-file','btn--danger');row.append(item);
-      if(doc.missing){const repair=makeButton('↗','Найти файл',async()=>{const paths=await window.presentation.openFiles();if(!paths.length)return;const index=docs.indexOf(doc);try{const replacement=await loadFile(paths[0],doc.page,doc.mediaState?.time,{...doc,path:paths[0],name:null,preparedPath:null});docs.splice(docs.indexOf(replacement),1);docs[index]=replacement;persist();drawLibrary();await refresh();}catch(e){setMessage(e.message);}});row.append(repair);}
+      if(doc.missing){const repair=makeButton('↗','Найти файл',()=>void repairFile(doc).catch(e=>setMessage(e.message)));row.append(repair);}
       row.append(remove);dropTarget(row,'file',doc.id);list.append(row);
     }
   }
@@ -581,6 +591,7 @@ async function showSelected() {
   try { if (!doc.mediaUrl) image = await renderPage(doc, page, 1920, 1080); }
   catch (error) { setMessage(`Не удалось подготовить слайд: ${error.message}`); return; }
   if (sequence !== publishSequence || selectedId !== doc.id || doc.page !== page) return;
+  if(detachedActive && detachedActive!==doc){releaseDoc(detachedActive);detachedActive=null;}
   activeId = doc.id; activePage = page; stageImage = image;
   preparing = false; placeholderOn = false; qrOn = false;
   setStage();
@@ -624,7 +635,7 @@ $('close-show-btn').addEventListener('click', async () => {
 });
 $('placeholder-btn').addEventListener('click', togglePlaceholder);
 $('placeholder-settings').addEventListener('click', () => $('placeholder-dialog').showModal());
-$('notes').addEventListener('input', () => { const doc = selected(); if (doc) { doc.notes=$('notes').value; persist(); $('notes-state').textContent = 'Заметки сохранены'; } });
+$('notes').addEventListener('input', () => { const doc = selected(); if (doc) { doc.notes=$('notes').value; persist('notes:'+doc.id); $('notes-state').textContent = 'Заметки сохранены'; } });
 
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => closeDialog(button.dataset.close)));
 for (const dialog of document.querySelectorAll('dialog')) dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
@@ -665,6 +676,7 @@ $('remote-btn').addEventListener('click', async () => {
 });
 
 window.presentation.onRemoteAction(action => {
+  if(restoring||history?.busy||document.body.classList.contains('event-busy'))return;
   if (action === 'prev') changePage(-1);
   else if (action === 'next') changePage(1);
   else if (action === 'show') showSelected();
@@ -672,7 +684,8 @@ window.presentation.onRemoteAction(action => {
 });
 window.presentation.onAudienceClosed(() => { audienceOpen = false; pauseCurrentMedia(); timer.pause(); updateHeader(selected()); updateLibrary(); setMessage('Экран зрителей закрыт.'); });
 document.addEventListener('keydown', event => {
-  if (restoring || document.body.classList.contains('event-busy') || document.querySelector('dialog[open]') || isTyping(event)) return;
+  if (restoring || history?.busy || document.body.classList.contains('event-busy') || document.querySelector('dialog[open]') || isTyping(event)) return;
+  if((event.ctrlKey||event.metaKey) && ['z','я','y','н'].includes(event.key.toLowerCase())){event.preventDefault();void travelHistory(event.shiftKey||['y','н'].includes(event.key.toLowerCase()));return;}
   if (event.target.closest?.('button') && ['Enter', ' '].includes(event.key)) return;
   if (event.key === 'ArrowLeft') { event.preventDefault(); changePage(-1); }
   if (event.key === 'ArrowRight' || event.key === ' ') { event.preventDefault(); changePage(1); }
@@ -681,6 +694,91 @@ document.addEventListener('keydown', event => {
   if (event.key === 'F5') { event.preventDefault(); startShow(); }
 });
 
+async function repairFile(doc){
+  const paths=await window.presentation.openFiles();if(!paths.length)return;
+  const index=docs.indexOf(doc);if(index<0)return;
+  restoring=true;
+  try{
+    const replacement=await loadFile(paths[0],doc.page,doc.mediaState?.time,{...doc,path:paths[0],name:null,preparedPath:null});
+    docs.splice(docs.indexOf(replacement),1);docs[index]=replacement;
+    if(mediaDocId===doc.id){pauseCurrentMedia();mediaDocId=null;}
+    releaseDoc(doc);
+  }finally{restoring=false;}
+  persist();drawLibrary();await refresh();
+}
+function releaseDoc(doc){
+  if(doc.imageUrl)URL.revokeObjectURL(doc.imageUrl);
+  if(doc.mediaUrl)void window.presentation.releaseMedia(doc.mediaUrl);
+  doc.renderCache?.clear();if(doc.pdf)void doc.pdf.loadingTask.destroy().catch(()=>{});
+}
+async function restoreEdits(saved){
+  const before=snapshot(),old=docs.slice(),chosen=selectedId,outputDoc=active();
+  if(detachedActive&&!old.includes(detachedActive))old.push(detachedActive);
+  const previousPreparing=preparing;
+  restoring=true;renderSequence++;publishSequence++;
+  document.body.classList.add('history-busy');
+  try{
+    sections=structuredClone(saved.sections);
+    const rebuilt=[];
+    for(const item of saved.files){
+      let doc=old.find(d=>d.id===item.id && d.path===item.path && d.preparedPath===(item.preparedPath||null));
+      if(doc){doc.name=item.name;doc.notes=item.notes;doc.sectionId=item.sectionId;doc.videoOptions=videoOptions(item.videoOptions);}
+      else{
+        try{doc=await loadFile(item.path,item.page,item.time,item);}
+        catch{doc={...item,missing:true,kind:'missing',pages:1,page:item.page||1,renderCache:new Map()};}
+      }
+      rebuilt.push(doc);
+    }
+    for(const doc of old)if(!rebuilt.includes(doc)){
+      if(doc===outputDoc && audienceOpen){detachedActive=doc;continue;}
+      if(mediaDocId===doc.id){pauseCurrentMedia();mediaDocId=null;}
+      releaseDoc(doc);
+    }
+    docs.splice(0,docs.length,...rebuilt);
+    if(rebuilt.includes(detachedActive))detachedActive=null;
+    if(!active()){activeId=null;preparing=true;}
+    selectedId=docs.some(d=>d.id===chosen)?chosen:docs[0]?.id||null;
+    if(editSignature({music:before.music})!==editSignature({music:saved.music}))await music.applyEdits(saved.music||{});
+    placeholder=structuredClone(saved.placeholder);$('placeholder-color').value=placeholder.color;$('placeholder-text').value=placeholder.text;
+    $('materials-link').value=saved.materialsLink||'';
+    if(before.materialsLink!==saved.materialsLink){materialsQr=null;$('materials-qr').hidden=true;$('show-qr').disabled=true;}
+    if(before.timerLimit!==saved.timerLimit)timer.load(saved.timerLimit);
+    notesDocId=null;drawLibrary();
+    // An edit undo must never switch the slide currently seen by the audience.
+    preparing=true;await refresh();preparing=previousPreparing;updateHeader(selected());
+  }finally{restoring=false;document.body.classList.remove('history-busy');}
+  persist();
+}
+async function travelHistory(redo=false){
+  if(restoring || advancing || document.body.classList.contains('event-busy'))return;
+  try{const changed=await (redo?history.redo():history.undo());if(changed)setMessage(redo?'Изменение повторено':'Изменение отменено');}
+  catch(error){setMessage('Не удалось отменить изменение: '+error.message);}
+}
+$('undo-btn').addEventListener('click',()=>void travelHistory());
+$('redo-btn').addEventListener('click',()=>void travelHistory(true));
+function probeMedia(url,kind){
+  return new Promise((resolve,reject)=>{
+    const element=document.createElement(kind==='audio'?'audio':'video');element.preload='metadata';
+    const cleanup=()=>{element.onloadedmetadata=null;element.onerror=null;clearTimeout(timeout);element.removeAttribute('src');element.load();};
+    const timeout=setTimeout(()=>{cleanup();reject(Error('Файл доступен, но не удалось загрузить метаданные за 8 секунд. Проверьте формат на репетиции.'));},8000);
+    element.onloadedmetadata=()=>{element.onloadedmetadata=null;element.onerror=null;cleanup();resolve('Файл доступен, метаданные загружены.');};
+    element.onerror=()=>{element.onloadedmetadata=null;element.onerror=null;cleanup();reject(Error('Не удалось прочитать медиафайл. Проверьте формат или замените файл.'));};
+    element.src=url;element.load();
+  });
+}
+createPreflight({$,bridge:window.presentation,capture:snapshot,isLive:()=>audienceOpen,
+  canRun:()=>{if(restoring||history?.busy||advancing||document.body.classList.contains('event-busy'))return false;if(audienceOpen){setMessage('Для проверки перед стартом сначала закройте экран зрителей.');return false;}return true;},
+  repair:file=>file.kind==='audio'?music.repairTrack(file.id):repairFile(docs.find(d=>d.id===file.id)),
+  inspect:async file=>{
+    const fresh=await window.presentation.readFile(file.preparedPath||file.path);
+    if(fresh.mediaUrl){try{return await probeMedia(fresh.mediaUrl,file.kind==='audio'?'audio':'video');}finally{await window.presentation.releaseMedia(fresh.mediaUrl);}}
+    if(fresh.type==='.pdf'){
+      const task=pdfjs.getDocument({data:new Uint8Array(fresh.bytes),wasmUrl:'local/wasm/',cMapUrl:'local/cmaps/',standardFontDataUrl:'local/standard_fonts/',BinaryDataFactory:LocalPdfAssets,useWorkerFetch:false});
+      try{const pdf=await task.promise,page=await pdf.getPage(1),original=page.getViewport({scale:1});const viewport=page.getViewport({scale:Math.min(640/original.width,360/original.height)});const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.ceil(viewport.width));canvas.height=Math.max(1,Math.ceil(viewport.height));await page.render({canvas,canvasContext:canvas.getContext('2d'),viewport,intent:'print'}).promise;return `Подготовлено страниц: ${pdf.numPages}. Первый слайд отображается.`;}finally{await task.destroy();}
+    }
+    const url=bufferToDataUrl(fresh.bytes,mimeFor(fresh.type));try{await decodeImage(url);return 'Изображение загружено.';}finally{URL.revokeObjectURL(url);}
+  }
+});
 function legacyState(){
   const saved=savedState();
   for(const file of saved.files || [])file.notes=localStorage.getItem(`pult.notes.${file.path}`)||'';
@@ -692,6 +790,7 @@ async function applyEvent(saved) {
   restoring=true;renderSequence++;publishSequence++;thumbObserver?.disconnect();
   music.stop();
   pauseCurrentMedia();
+  if(detachedActive){releaseDoc(detachedActive);detachedActive=null;}
   $('video-player').removeAttribute('src');$('video-player').load();mediaDocId=null;
   for(const doc of docs){if(doc.imageUrl)URL.revokeObjectURL(doc.imageUrl);if(doc.mediaUrl)void window.presentation.releaseMedia(doc.mediaUrl);doc.renderCache.clear();if(doc.pdf)await doc.pdf.loadingTask.destroy().catch(()=>{});}
   docs.length=0;selectedId=null;activeId=null;stageImage=null;activePage=null;displayedDocId=null;notesDocId=null;thumbDocId=null;preparing=false;qrOn=false;materialsQr=null;placeholderOn=false;
@@ -713,8 +812,14 @@ async function applyEvent(saved) {
   selectedId=docs.find(d=>!d.missing)?.id||docs[0]?.id||null;
   activeId=selectedId;
   restoring=false;drawLibrary();setStage();await refresh();
+  history?.reset();
   if(docs.some(d=>d.missing))setMessage('Некоторые файлы не найдены. Нажмите ↗ рядом с материалом, чтобы найти его.');
 }
-events=createEvents({$,bridge:window.presentation,snapshot,apply:applyEvent,legacy:legacyState,canSwitch:()=>{if(audienceOpen){setMessage('Для смены мероприятия сначала закройте экран зрителей.');return false;}return true;},setMessage});
+history=createHistory({capture:snapshot,apply:restoreEdits,onChange:state=>{
+  $('undo-btn').disabled=!state.undo||state.busy;$('redo-btn').disabled=!state.redo||state.busy;
+  $('history-status').textContent=state.busy?'Восстанавливаю изменение…':'Ctrl+Z — отменить · Ctrl+Shift+Z — повторить';
+}});
+window.addEventListener('pult-music-changed',()=>{if(!restoring)history.observe();});
+events=createEvents({$,bridge:window.presentation,snapshot,apply:applyEvent,legacy:legacyState,canSwitch:()=>{if(history.busy||restoring)return false;if(audienceOpen){setMessage('Для смены мероприятия сначала закройте экран зрителей.');return false;}return true;},setMessage});
 $('timer-limit').addEventListener('change',persist);
 void events.initialize().catch(error=>{setMessage(error.message);$('event-status').textContent='Ошибка загрузки';});

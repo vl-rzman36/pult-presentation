@@ -20,6 +20,7 @@ app.on('before-quit', event => {
 
 let presenter;
 let audience;
+let testDisplayWindow;
 let stage = { mode: 'idle' };
 let remoteServer;
 let remotePort;
@@ -54,7 +55,7 @@ function createPresenter() {
   });
   presenter.webContents.on('did-fail-load', (_event, code, description) => console.error('Presenter load:', code, description));
   presenter.loadFile(path.join(__dirname, 'index.html'));
-  presenter.on('closed', () => { presenter = null; audience?.close(); });
+  presenter.on('closed', () => { presenter = null; audience?.close();testDisplayWindow?.close(); });
 }
 
 function audienceBounds() {
@@ -268,4 +269,23 @@ ipcMain.handle('remote-info', async () => {
   if (!remotePort) return { urls: [], qr: null };
   const urls = localAddresses().map(ip => `http://${ip}:${remotePort}/?token=${remoteToken}`);
   return { urls, qr: urls[0] ? await QRCode.toDataURL(urls[0], { width: 420, margin: 2 }) : null };
+});
+
+ipcMain.handle('preflight', async (_event, files) => {
+  if(!Array.isArray(files)||files.length>10000)throw new Error('Слишком много материалов для проверки');
+  const results=[];
+  for(const file of files){
+    const target=file.preparedPath || file.path;
+    if(typeof target!=='string'||!allowedExtensions.has(path.extname(target).toLowerCase())){results.push({ok:false,message:'Неподдерживаемый файл'});continue;}
+    try{await fs.access(target);const stat=await fs.stat(target);results.push(stat.isFile()&&stat.size>0?{ok:true}:{ok:false,message:'Файл пуст или недоступен'});}
+    catch{results.push({ok:false,message:'Файл не найден или нет доступа. Укажите его расположение.'});}
+  }
+  return {files:results,displays:screen.getAllDisplays().map(d=>({id:d.id,label:d.label,width:d.size.width,height:d.size.height}))};
+});
+ipcMain.handle('test-display',()=>{
+  if(audience&&!audience.isDestroyed())throw new Error('Сначала закройте экран зрителей');
+  if(testDisplayWindow&&!testDisplayWindow.isDestroyed()){testDisplayWindow.focus();return;}
+  const primary=screen.getPrimaryDisplay();const display=screen.getAllDisplays().find(d=>d.id!==primary.id)||primary;
+  testDisplayWindow=new BrowserWindow({...display.bounds,fullscreen:true,frame:false,backgroundColor:'#202329',webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
+  testDisplayWindow.loadFile(path.join(__dirname,'test-screen.html'));testDisplayWindow.on('closed',()=>{testDisplayWindow=null;});
 });

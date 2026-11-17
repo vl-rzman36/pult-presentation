@@ -35,7 +35,7 @@ export function createMusicController({ bridge, $, setMessage, isVideoPlaying })
     if(isVideoPlaying()){resumeAfterVideo=true;player.pause();updatePlayer();return;}
     if(!player.paused){ramp(1,fadeSeconds);updatePlayer();return;}
     envelope=0;applyVolume();
-    void player.play().catch(()=>setMessage('Не удалось начать воспроизведение'));
+    void player.play().catch(error=>{if(error.name!=='AbortError')setMessage('Не удалось начать воспроизведение');});
   }
   $('music-fade').addEventListener('change',()=>{fadeSeconds=Number($('music-fade').value);persist();});
   $('track-volume').addEventListener('input',()=>{
@@ -308,5 +308,40 @@ export function createMusicController({ bridge, $, setMessage, isVideoPlaying })
   player.addEventListener('ended', advanceOnEnd);
   player.addEventListener('error', () => { if (currentTrack()) setMessage('Не удалось воспроизвести трек. Попробуйте MP3 или WAV.'); });
 
-  return { restore, addPaths, pauseForVideo, resumeFromVideo, stop(){cancelFade();resumeAfterVideo=false;player.pause();} };
+  async function applyEdits(saved){
+    loading=true;
+    const old=playlists.flatMap(list=>list.tracks),rebuilt=[];
+    try{
+      for(const list of saved.playlists||[]){
+        const next={id:list.id,name:list.name,tracks:[]};
+        for(const item of list.tracks||[]){
+          let track=old.find(t=>t.id===item.id&&t.path===item.path);
+          if(!track){try{const file=await bridge.readFile(item.path);track={id:item.id,path:item.path,name:item.name||file.name,url:file.mediaUrl};}catch{track={...item,url:null,missing:true};}}
+          track.name=item.name||track.name;track.volume=Number.isFinite(item.volume)?Math.max(0,Math.min(1,item.volume)):1;next.tracks.push(track);
+        }
+        rebuilt.push(next);
+      }
+      if(!rebuilt.length)rebuilt.push({id:crypto.randomUUID(),name:'Моя музыка',tracks:[]});
+      const used=rebuilt.flatMap(list=>list.tracks);
+      const keepCurrent=rebuilt.some(list=>list.id===current?.playlistId&&list.tracks.some(t=>t.id===current?.trackId&&old.includes(t)));
+      if(!keepCurrent){cancelFade();resumeAfterVideo=false;player.pause();player.removeAttribute('src');player.load();current=null;}
+      playlists=rebuilt;selectedPlaylistId=playlists.some(l=>l.id===selectedPlaylistId)?selectedPlaylistId:playlists[0].id;
+      for(const track of old)if(!used.includes(track)&&track.url)void bridge.releaseMedia(track.url);
+      masterVolume=Number.isFinite(saved.volume)?Math.max(0,Math.min(1,saved.volume)):.7;
+      fadeSeconds=[0,.5,1,2,3].includes(saved.fadeSeconds)?saved.fadeSeconds:1;
+      playMode=['playlist-loop','playlist-once','track-once','track-loop','shuffle'].includes(saved.playMode)?saved.playMode:'playlist-loop';
+      $('music-volume').value=String(Math.round(masterVolume*100));$('music-fade').value=String(fadeSeconds);$('music-play-mode').value=playMode;
+      applyVolume();
+    }finally{loading=false;}
+    persist();draw();
+  }
+  async function repairTrack(id){
+    const track=playlists.flatMap(list=>list.tracks).find(t=>t.id===id);if(!track)return;
+    const paths=await bridge.openAudioFiles();if(!paths.length)return;
+    const file=await bridge.readFile(paths[0]);if(!file.mediaUrl)throw Error('Выберите аудиофайл');
+    if(current?.trackId===id){cancelFade();resumeAfterVideo=false;player.pause();player.removeAttribute('src');player.load();current=null;}
+    if(track.url)void bridge.releaseMedia(track.url);
+    Object.assign(track,{path:paths[0],name:file.name,url:file.mediaUrl,missing:false});persist();draw();
+  }
+  return { restore, applyEdits, repairTrack, addPaths, pauseForVideo, resumeFromVideo, stop(){cancelFade();resumeAfterVideo=false;player.pause();} };
 }
