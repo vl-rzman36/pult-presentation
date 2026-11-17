@@ -1,0 +1,54 @@
+/* Shared action controls. Geometry is independent of the surrounding panel. */
+:root {
+  --button-height:36px;
+  --button-compact-height:30px;
+  --button-radius:6px;
+  --button-background:#3a4351;
+  --button-border:#586477;
+  --button-text:#edf2fa;
+}
+.btn {
+  appearance:none;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  height:var(--button-height);
+  min-height:var(--button-height);
+  padding:0 12px;
+  margin:0;
+  border:1px solid var(--button-border);
+  border-radius:var(--button-radius);
+  background:var(--button-background);
+  color:var(--button-text);
+  font-family:inherit;
+  font-size:12px;
+  font-weight:600;
+  line-height:1;
+  white-space:nowrap;
+  vertical-align:middle;
+  cursor:pointer;
+  user-select:none;
+  filter:none;
+  box-shadow:none;
+  transition:background-color .12s,border-color .12s;
+}
+.btn.btn--compact {height:var(--button-compact-height);min-height:var(--button-compact-height);padding:0 9px;font-size:11px}
+.btn.btn--icon {width:var(--button-height);min-width:var(--button-height);padding:0;font-size:18px;flex-shrink:0}
+.btn.btn--icon.btn--compact {width:var(--button-compact-height);min-width:var(--button-compact-height);padding:0;font-size:16px}
+.btn--primary {--button-background:#9abaff;--button-border:#9abaff;--button-text:#19263f}
+.btn--hold {--button-background:#4c3b40;--button-border:#936a68;--button-text:#ffcec1}
+.btn--ghost {--button-background:transparent;--button-border:transparent;--button-text:#bcc8da}
+.btn:hover:not(:disabled) {background:color-mix(in srgb,var(--button-background),#ffffff 9%);border-color:#8a9ab3;filter:none}
+.btn:active:not(:disabled) {background:color-mix(in srgb,var(--button-background),#000000 12%)}
+.btn.btn--danger:hover:not(:disabled) {background:#603d45;border-color:#9b6570;color:#ffe1e5}
+.btn.active,.btn[aria-pressed=true] {background:#a8c2f4;border-color:#a8c2f4;color:#1b2c46}
+.btn--hold.active {background:#ffc3a6;border-color:#ffc3a6;color:#38241b}
+.btn:disabled {opacity:.4;cursor:default}
+/* Inset keyboard focus does not produce a second, oversized outer frame. */
+.btn:focus-visible,.control-surface:focus-visible {outline:2px solid #c7d9ff;outline-offset:-3px}
+.btn:focus:not(:focus-visible),.control-surface:focus:not(:focus-visible) {outline:none}
+.btn-icon {width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.btn kbd {margin:0;font-size:10px}
+@media(max-width:1250px){.btn{font-size:11px;padding-inline:9px}}
+@media(prefers-reduced-motion:reduce){.btn{transition:none}}

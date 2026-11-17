@@ -1,0 +1,20 @@
+.event-picker{padding:10px 12px;border-bottom:1px solid var(--line)}
+.event-picker>label{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:6px;gap:8px}
+.event-picker>div{display:flex;gap:6px;align-items:center}
+.event-picker select{flex:1;width:0;height:32px;font-size:12px;padding:4px 7px}
+.section-tools{display:flex;gap:5px;padding:0 10px 8px;align-items:center}
+.section-tools select{min-width:0;width:0;flex:1;height:30px;font-size:10px;padding:4px}
+.section-tools .btn{padding-inline:6px;font-size:10px}
+.scenario-section{display:flex;align-items:center;border-top:1px solid var(--line);padding:7px 0 4px;margin-top:6px;gap:2px}
+.section-title{min-width:0;flex:1;text-align:left;font-size:12px;font-weight:650;border:0;background:none;color:#c3d5f6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 2px;cursor:pointer}
+.section-note{font-size:10px;color:#abb8cc;padding:0 8px 3px 25px;margin:0;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.scenario-handle.btn{width:20px;min-width:20px;align-self:center;padding:0;cursor:grab;color:#a7b5cc;font-size:15px}
+.scenario-handle:active{cursor:grabbing}
+.file-row{gap:1px;align-items:center}.file-card{padding:10px 6px}.remove-file.btn{width:24px;min-width:24px}
+.file-row.dragging,.scenario-section.dragging{opacity:.4}
+.file-row.drop-before,.scenario-section.drop-before{box-shadow:inset 0 3px var(--accent)}
+.file-row.drop-after,.scenario-section.drop-after{box-shadow:inset 0 -3px var(--accent)}
+#events-dialog{width:min(570px,calc(100vw - 32px))}#events-dialog hr{border:0;border-top:1px solid var(--line);margin:22px 0}
+#section-form>label+label{margin-top:14px}#section-notes{resize:vertical;font:inherit;line-height:1.5}
+.event-busy .app-shell,.event-busy dialog{pointer-events:none;cursor:progress}
+@media(max-height:760px){.event-picker{padding:6px 10px}.event-picker>label{margin-bottom:3px}.music-panel-body{overflow:auto;flex:1;min-height:60px}.music-panel .music-track-list{min-height:80px;flex-shrink:0}.library-pane .pane-title{height:40px}}
