@@ -20,3 +20,15 @@
 @media(max-height:760px){.event-picker{padding:6px 10px}.event-picker>label{margin-bottom:3px}.music-panel-body{overflow:auto;flex:1;min-height:60px}.music-panel .music-track-list{min-height:80px;flex-shrink:0}.library-pane .pane-title{height:40px}}
 
 .scenario-next{display:flex;align-items:center;gap:8px;margin:4px 0 8px;min-width:0}.scenario-next>span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--muted,#aab3c1)}.scenario-next .btn{flex-shrink:0}.check-option{display:flex;align-items:center;gap:10px;margin:16px 0}.check-option input{width:auto}.music-track-row .track-settings{flex:none}.music-mode select{width:100%}@media(max-width:1250px){.scenario-next{flex-wrap:wrap}.scenario-next>span{flex-basis:100%}}@media(max-height:760px){.scenario-next{margin:0 0 3px}.scenario-next .btn{min-height:28px}.music-dock .music-mode{margin-top:4px}}
+
+/* Scenario progress is separate from selection and edit history. */
+.scenario-section{flex-wrap:wrap;column-gap:4px}
+.section-collapse.btn{order:-1;width:28px;min-width:28px;font-size:20px}
+.scenario-section>.scenario-handle{order:2}
+.section-count{color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.scenario-section.section-live .section-title{color:var(--live,#ff9b86)}
+.scenario-section.section-live .section-count::before{content:'● ';color:var(--live,#ff9b86)}
+.file-row.is-live .file-card{box-shadow:inset 3px 0 var(--live,#ff9b86);background:#3d3030;border-color:#ba8071}
+.file-row.was-shown:not(.is-live) .onair-chip{color:#9ebba8;font-size:10px}
+.file-row.is-live .onair-chip{color:var(--live,#ff9b86);font-size:10px;font-weight:650}
+.library-foot #reset-progress{font-size:10px;min-height:26px;padding:3px 5px;align-self:flex-start}

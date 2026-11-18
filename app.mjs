@@ -12,6 +12,9 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL('./node_modules/pdfjs-dist/legacy/
 
 const $ = id => document.getElementById(id);
 const docs = [];
+const collapsedSections = new Set();
+const shownMaterials = new Set();
+
 let sections = [];
 let currentSectionId = null;
 let events;
@@ -327,6 +330,8 @@ function showMedia(doc) {
 
 function updateOutput() {
   const doc = active();
+  if(audienceOpen&&!displayDisconnected&&!placeholderOn&&!qrOn&&doc&&!doc.missing&&(doc.mediaUrl||stageImage))shownMaterials.add(doc.id);
+  updateLibrary();
   const image = $('output-image');
   const text = $('output-text');
   const monitor = $('output-monitor');
@@ -466,8 +471,8 @@ function drawLibrary() {
   for(const section of sections){
     const option=document.createElement('option');option.value=section.id;option.textContent=section.name;$('section-select').append(option);
     const header=document.createElement('div');header.className='scenario-section';header.dataset.sectionId=section.id;dragHandle(header,'section',section.id);
-    const title=document.createElement('button');title.className='section-title control-surface';title.textContent=section.name;title.title=section.notes||'Изменить название и заметки раздела';title.addEventListener('click',()=>openSection(section));header.append(title);dropTarget(header,'section',section.id);list.append(header);
-    if(section.notes){const note=document.createElement('p');note.className='section-note';note.textContent=section.notes;list.append(note);}
+    const title=document.createElement('button');title.className='section-title control-surface';title.textContent=section.name;title.title=section.notes||'Изменить название и заметки раздела';title.addEventListener('click',()=>openSection(section));header.append(title);const collapse=makeButton('⌄',`Свернуть раздел «${section.name}»`,()=>{collapsedSections.has(section.id)?collapsedSections.delete(section.id):collapsedSections.add(section.id);updateLibrary();});collapse.classList.add('section-collapse');header.append(collapse);const count=document.createElement('span');count.className='section-count';header.append(count);dropTarget(header,'section',section.id);list.append(header);
+    if(section.notes){const note=document.createElement('p');note.className='section-note';note.dataset.sectionId=section.id;note.textContent=section.notes;list.append(note);}
     for(const doc of docs.filter(d=>d.sectionId===section.id)){
       const row=document.createElement('div');row.className='file-row';row.dataset.id=doc.id;dragHandle(row,'file',doc.id);
       const item=document.createElement('button');item.type='button';item.className='control-surface file-card';item.title=doc.name;
@@ -490,17 +495,41 @@ $('section-form').addEventListener('submit',event=>{event.preventDefault();const
 $('section-delete').addEventListener('click',()=>{if(sections.length<2)return;const target=sections.find(s=>s.id!==editingSectionId);for(const doc of docs)if(doc.sectionId===editingSectionId)doc.sectionId=target.id;sections=sections.filter(s=>s.id!==editingSectionId);currentSectionId=target.id;persist();drawLibrary();$('section-dialog').close();});
 
 function updateLibrary() {
+  const query=$('file-search').value.trim().toLocaleLowerCase();
+  const visible=doc=>!query||doc.name.toLocaleLowerCase().includes(query);
+  const live=audienceOpen&&!displayDisconnected&&!placeholderOn&&!qrOn;
   for (const row of $('file-list').children) {
-    const doc = docs.find(item => item.id === row.dataset.id);
-    if (!doc) continue;
-    const button = row.querySelector('.file-card');
-    button.classList.toggle('selected', selectedId === doc.id);
-    button.classList.toggle('active', activeId === doc.id);
-    row.querySelector('.file-pages').textContent = fileSummary(doc);
-    row.querySelector('.onair-chip').textContent = audienceOpen && activeId === doc.id ? 'В показе' : '';
-    row.hidden = !$('file-search').value.trim() ? false : !doc.name.toLocaleLowerCase().includes($('file-search').value.trim().toLocaleLowerCase());
+    const section=sections.find(s=>s.id===row.dataset.sectionId);
+    if(section){
+      const items=docs.filter(d=>d.sectionId===section.id);
+      row.hidden=Boolean(query&&!items.some(visible));
+      if(row.classList.contains('section-note')){row.hidden ||= !query&&collapsedSections.has(section.id);continue;}
+      const expanded=Boolean(query)||!collapsedSections.has(section.id);
+      const toggle=row.querySelector('.section-collapse');
+      toggle.textContent=expanded?'⌄':'›';toggle.setAttribute('aria-expanded',String(expanded));
+      toggle.title=`${expanded?'Свернуть':'Развернуть'} раздел «${section.name}»`;
+      toggle.setAttribute('aria-label',toggle.title);toggle.disabled=Boolean(query);
+      row.classList.toggle('section-live',live&&items.some(d=>d.id===activeId));
+      const count=row.querySelector('.section-count');
+      count.textContent=`${items.filter(d=>shownMaterials.has(d.id)).length} / ${items.length}`;
+      count.title='Показано материалов / всего';
+      continue;
+    }
+    const doc=docs.find(item=>item.id===row.dataset.id);if(!doc)continue;
+    const button=row.querySelector('.file-card');
+    button.classList.toggle('selected',selectedId===doc.id);
+    button.classList.toggle('active',live&&activeId===doc.id);
+    row.classList.toggle('is-live',live&&activeId===doc.id);
+    row.classList.toggle('was-shown',shownMaterials.has(doc.id));
+    row.querySelector('.file-pages').textContent=fileSummary(doc);
+    row.querySelector('.onair-chip').textContent=live&&activeId===doc.id?'● У зрителей':shownMaterials.has(doc.id)?'✓ Показан':'';
+    row.hidden=!visible(doc)||(!query&&collapsedSections.has(doc.sectionId));
   }
+  const count=docs.filter(d=>shownMaterials.has(d.id)).length;
+  $('file-count').textContent=`Показано ${count} из ${docs.length}`;
+  $('reset-progress').disabled=count===0;
 }
+$('reset-progress').addEventListener('click',()=>{shownMaterials.clear();updateLibrary();setMessage('Отметки показанных материалов сброшены. Текущий показ продолжается.');});
 
 function removeFile(id) {
   publishSequence++;
@@ -803,6 +832,7 @@ function legacyState(){
   return saved;
 }
 async function applyEvent(saved) {
+  collapsedSections.clear();shownMaterials.clear();
   restoring=true;renderSequence++;publishSequence++;thumbObserver?.disconnect();
   music.stop();
   pauseCurrentMedia();
